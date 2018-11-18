@@ -78,44 +78,54 @@ void loop() {
   int rightMotorSpeedCorrection = 0;
   int noLineDetected = SENSOR_LINE_VALUE == 1 ? 255 : 1;
 
+  // we lost the line, keep going in the direction you were going before
   if (sensorData == noLineDetected && (lastLeftMotorSpeedCorrection != 0 || lastRightMotorSpeedCorrection != 0)) {
     leftMotorSpeedCorrection = lastLeftMotorSpeedCorrection;
     rightMotorSpeedCorrection = lastRightMotorSpeedCorrection;
   } else {
-    for (int i = 1; i < 8; i++) {
-      int bitValue = bitRead(sensorData, i) == 0;
+    int numLineDetections = getNumLineDetections(sensorData);
 
-      // 1 == far right, 7 == far left
-      if (bitValue == SENSOR_LINE_VALUE) {
-        Serial.println(i);
+    // if more than one sensor of the sensor array triggers
+    // we might have hit a crossing and should go straight forward
+    if (numLineDetections > 1) {
+      leftMotorSpeedCorrection = 0;
+      rightMotorSpeedCorrection = 0;
+    } else {
+      for (int i = 1; i < 8; i++) {
+        int bitValue = bitRead(sensorData, i) == 0;
 
-        if (i == 4) { // immer gerade aus!
-          leftMotorSpeedCorrection = 0;
-          rightMotorSpeedCorrection = 0;
-        }
-        else if (i == 1) { // hard right!
-          leftMotorSpeedCorrection = 0;
-          rightMotorSpeedCorrection = INIT_MOTOR_SPEED;
-        }
-        else if (i == 7) { // hard left!
-          leftMotorSpeedCorrection = INIT_MOTOR_SPEED;
-          rightMotorSpeedCorrection = 0;
-        }
-        else if (i == 2) { // medium right!
-          leftMotorSpeedCorrection = SLOW_MOTOR_SPEED;
-          rightMotorSpeedCorrection = MEDIUM_MOTOR_SPEED;
-        }
-        else if (i == 6) { // medium left!
-          leftMotorSpeedCorrection = MEDIUM_MOTOR_SPEED;
-          rightMotorSpeedCorrection = SLOW_MOTOR_SPEED;
-        }
-        else if (i == 3) { // soft right!
-          leftMotorSpeedCorrection = SUPER_SLOW_MOTOR_SPEED;
-          rightMotorSpeedCorrection = SLOW_MOTOR_SPEED;
-        }
-        else if (i == 5) { // soft left!
-          leftMotorSpeedCorrection = SLOW_MOTOR_SPEED;
-          rightMotorSpeedCorrection = SUPER_SLOW_MOTOR_SPEED;
+        // 1 == far right, 7 == far left
+        if (bitValue == SENSOR_LINE_VALUE) {
+          Serial.println(i);
+
+          if (i == 4) { // immer gerade aus!
+            leftMotorSpeedCorrection = 0;
+            rightMotorSpeedCorrection = 0;
+          }
+          else if (i == 1) { // hard right!
+            leftMotorSpeedCorrection = 0;
+            rightMotorSpeedCorrection = INIT_MOTOR_SPEED;
+          }
+          else if (i == 7) { // hard left!
+            leftMotorSpeedCorrection = INIT_MOTOR_SPEED;
+            rightMotorSpeedCorrection = 0;
+          }
+          else if (i == 2) { // medium right!
+            leftMotorSpeedCorrection = SLOW_MOTOR_SPEED;
+            rightMotorSpeedCorrection = MEDIUM_MOTOR_SPEED;
+          }
+          else if (i == 6) { // medium left!
+            leftMotorSpeedCorrection = MEDIUM_MOTOR_SPEED;
+            rightMotorSpeedCorrection = SLOW_MOTOR_SPEED;
+          }
+          else if (i == 3) { // soft right!
+            leftMotorSpeedCorrection = SUPER_SLOW_MOTOR_SPEED;
+            rightMotorSpeedCorrection = SLOW_MOTOR_SPEED;
+          }
+          else if (i == 5) { // soft left!
+            leftMotorSpeedCorrection = SLOW_MOTOR_SPEED;
+            rightMotorSpeedCorrection = SUPER_SLOW_MOTOR_SPEED;
+          }
         }
       }
     }
@@ -142,7 +152,7 @@ void loop() {
 
 /**
  * Returns the distance to on object in front
- * @return long
+ * @return {long}
  */
 // byte getDistance() {
 //   long duration;
@@ -159,8 +169,27 @@ void loop() {
 // }
 
 /**
+ * Returns the number of simultaneous line detections
+ * @param {byte} sensorData
+ * @return {bool}
+ */
+bool getNumLineDetections(byte sensorData) {
+  int numLineDetections = 0;
+
+  for (int i = 1; i < 8; i++) {
+    int bitValue = bitRead(sensorData, i) == 0;
+
+    if (bitValue == SENSOR_LINE_VALUE) {
+      numLineDetections++;
+    }
+  }
+
+  return numLineDetections;
+}
+
+/**
  * Returns the sensor data
- * @return byte
+ * @return {byte}
  */
 byte getSensorData() {
   digitalWrite(LOAD_PIN, LOW);
