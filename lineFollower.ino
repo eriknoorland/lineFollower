@@ -4,32 +4,35 @@
 #define CLOCK_PIN 4
 #define DATA_PIN 5
 
-// ultrasonic sensor
-// #define TRIGGER_PIN 12
-// #define ECHO_PIN 13
+#define MOTOR_SPEED 100
+#define Kp 30
+#define Kd 3
 
-// motor board
-#define MTR_R_ENABLE_PIN 11 // speed
-#define MTR_R_INPUT_1_PIN 8 // direction
-#define MTR_R_INPUT_2_PIN 9 // direction
+#define SENSOR_LINE_VALUE 1 // 1 = black, 0 = white
 
-#define MTR_L_ENABLE_PIN 10 // speed
-#define MTR_L_INPUT_1_PIN 6 // direction
-#define MTR_L_INPUT_2_PIN 7 // direction
+struct Motor {
+  int enable; // speed
+  int input1; // direction
+  int input2; // direction
+};
 
-#define INIT_MOTOR_SPEED 255
-#define MEDIUM_MOTOR_SPEED (INIT_MOTOR_SPEED / 3) * 2
-#define SLOW_MOTOR_SPEED INIT_MOTOR_SPEED / 3
-#define SUPER_SLOW_MOTOR_SPEED INIT_MOTOR_SPEED / 4
+Motor leftMotor = { 10, 6, 7 };
+Motor rightMotor = { 11, 8, 9 };
 
-#define WHITE 0
-#define BLACK 1
-#define SENSOR_LINE_VALUE BLACK
+int lastError = 0;
+long lastMillis = 0;
 
-int lastLeftMotorSpeedCorrection = 0;
-int lastRightMotorSpeedCorrection = 0;
-
-// unsigned long previousMillis = 0;
+/**
+ * Motor control
+ * @param {Motor} motor
+ * @param {int} speed
+ * @param {int} direction
+ */
+void motorControl(Motor motor, int speed, int direction=1) {
+  analogWrite(motor.enable, speed);
+  digitalWrite(motor.input1, (direction == 1 ? LOW : HIGH));
+  digitalWrite(motor.input2, (direction == 1 ? HIGH : LOW));
+}
 
 /**
  * Setup
@@ -40,16 +43,13 @@ void setup() {
   pinMode(CLOCK_PIN, OUTPUT);
   pinMode(DATA_PIN, INPUT);
 
-  // pinMode(TRIGGER_PIN, OUTPUT);
-  // pinMode(ECHO_PIN, INPUT);
+  pinMode(rightMotor.enable, OUTPUT);
+  pinMode(rightMotor.input1, OUTPUT);
+  pinMode(rightMotor.input2, OUTPUT);
 
-  pinMode(MTR_R_ENABLE_PIN, OUTPUT);
-  pinMode(MTR_R_INPUT_1_PIN, OUTPUT);
-  pinMode(MTR_R_INPUT_2_PIN, OUTPUT);
-
-  pinMode(MTR_L_ENABLE_PIN, OUTPUT);
-  pinMode(MTR_L_INPUT_1_PIN, OUTPUT);
-  pinMode(MTR_L_INPUT_2_PIN, OUTPUT);
+  pinMode(leftMotor.enable, OUTPUT);
+  pinMode(leftMotor.input1, OUTPUT);
+  pinMode(leftMotor.input2, OUTPUT);
 
   Serial.begin(9600);
 }
@@ -58,138 +58,49 @@ void setup() {
  * Loop
  */
 void loop() {
-  // unsigned long currentMillis = millis();
-
-  // if (currentMillis - previousMillis >= 1000) {
-  //   Serial.println("1 second has past");
-    
-  //   if (getDistance() <= 10) {
-  //     Serial.println("Stop!");
-  //     leftMotorSpeed = 0;
-  //     rightMotorSpeed = 0;
-  //   }
-
-  //   previousMillis = currentMillis;
-  // }
-
   byte sensorData = getSensorData();
-  
-  int leftMotorSpeedCorrection = 0;
-  int rightMotorSpeedCorrection = 0;
-  int noLineDetected = SENSOR_LINE_VALUE == 1 ? 255 : 1;
 
-  // we lost the line, keep going in the direction you were going before
-  if (sensorData == noLineDetected && (lastLeftMotorSpeedCorrection != 0 || lastRightMotorSpeedCorrection != 0)) {
-    leftMotorSpeedCorrection = lastLeftMotorSpeedCorrection;
-    rightMotorSpeedCorrection = lastRightMotorSpeedCorrection;
-  } else {
-    int numLineDetections = getNumLineDetections(sensorData);
+  int goal = 4;
+  int activeSensor = getLineDetectionSensor(sensorData);
+  int error = goal - activeSensor;
+  int loopTime = millis() - lastMillis;
 
-    // if more than one sensor of the sensor array triggers
-    // we might have hit a crossing and should go straight forward
-    if (numLineDetections > 1) {
-      leftMotorSpeedCorrection = 0;
-      rightMotorSpeedCorrection = 0;
-    } else {
-      for (int i = 1; i < 8; i++) {
-        int bitValue = bitRead(sensorData, i) == 0;
+  float p = Kp * error;
+  float d = Kd * ((error - lastError) / loopTime);
 
-        // 1 == far right, 7 == far left
-        if (bitValue == SENSOR_LINE_VALUE) {
-          Serial.println(i);
+  int leftMotorSpeed = MOTOR_SPEED + (p + d);
+  int rightMotorSpeed = MOTOR_SPEED - (p + d);
 
-          if (i == 4) { // immer gerade aus!
-            leftMotorSpeedCorrection = 0;
-            rightMotorSpeedCorrection = 0;
-          }
-          else if (i == 1) { // hard right!
-            leftMotorSpeedCorrection = 0;
-            rightMotorSpeedCorrection = INIT_MOTOR_SPEED;
-          }
-          else if (i == 7) { // hard left!
-            leftMotorSpeedCorrection = INIT_MOTOR_SPEED;
-            rightMotorSpeedCorrection = 0;
-          }
-          else if (i == 2) { // medium right!
-            leftMotorSpeedCorrection = SLOW_MOTOR_SPEED;
-            rightMotorSpeedCorrection = MEDIUM_MOTOR_SPEED;
-          }
-          else if (i == 6) { // medium left!
-            leftMotorSpeedCorrection = MEDIUM_MOTOR_SPEED;
-            rightMotorSpeedCorrection = SLOW_MOTOR_SPEED;
-          }
-          else if (i == 3) { // soft right!
-            leftMotorSpeedCorrection = SUPER_SLOW_MOTOR_SPEED;
-            rightMotorSpeedCorrection = SLOW_MOTOR_SPEED;
-          }
-          else if (i == 5) { // soft left!
-            leftMotorSpeedCorrection = SLOW_MOTOR_SPEED;
-            rightMotorSpeedCorrection = SUPER_SLOW_MOTOR_SPEED;
-          }
-        }
-      }
-    }
-  }
-
-  int leftMotorSpeed = INIT_MOTOR_SPEED - leftMotorSpeedCorrection;
-  int rightMotorSpeed = INIT_MOTOR_SPEED - rightMotorSpeedCorrection;
-
-  // The motor speed should not exceed the max PWM value
   leftMotorSpeed = constrain(leftMotorSpeed, 0, 255);
   rightMotorSpeed = constrain(rightMotorSpeed, 0, 255);
 
-  analogWrite(MTR_L_ENABLE_PIN, leftMotorSpeed);
-  digitalWrite(MTR_L_INPUT_1_PIN, LOW);
-  digitalWrite(MTR_L_INPUT_2_PIN, HIGH);
+  motorControl(leftMotor, leftMotorSpeed, 1);
+  motorControl(rightMotor, rightMotorSpeed, 1);
 
-  analogWrite(MTR_R_ENABLE_PIN, rightMotorSpeed);
-  digitalWrite(MTR_R_INPUT_1_PIN, LOW);
-  digitalWrite(MTR_R_INPUT_2_PIN, HIGH);
+  lastError = error;
+  lastMillis = millis();
 
-  lastLeftMotorSpeedCorrection = leftMotorSpeedCorrection;
-  lastRightMotorSpeedCorrection = rightMotorSpeedCorrection; 
+  delay(20);
 }
 
 /**
- * Returns the distance to on object in front
- * @return {long}
- */
-// byte getDistance() {
-//   long duration;
-
-//   digitalWrite(TRIGGER_PIN, LOW);
-//   delayMicroseconds(2);
-//   digitalWrite(TRIGGER_PIN, HIGH);
-//   delayMicroseconds(10);
-//   digitalWrite(TRIGGER_PIN, LOW);
-
-//   duration = pulseIn(ECHO_PIN, HIGH);
-
-//   return duration * 0.034 / 2;
-// }
-
-/**
- * Returns the number of simultaneous line detections
+ * Returns the number of the sensor that detected the line
  * @param {byte} sensorData
- * @return {bool}
+ * @return {int}
  */
-bool getNumLineDetections(byte sensorData) {
-  int numLineDetections = 0;
-
+int getLineDetectionSensor(byte sensorData) {
   for (int i = 1; i < 8; i++) {
-    int bitValue = bitRead(sensorData, i) == 0;
-
-    if (bitValue == SENSOR_LINE_VALUE) {
-      numLineDetections++;
+    if ((bitRead(sensorData, i) == 0) == SENSOR_LINE_VALUE) {
+      return i;
     }
   }
 
-  return numLineDetections;
+  return 0;
 }
 
 /**
  * Returns the sensor data
- * @return {byte}
+ * @return {byte} 1 == far right, 7 == far left
  */
 byte getSensorData() {
   digitalWrite(LOAD_PIN, LOW);
