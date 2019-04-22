@@ -1,55 +1,72 @@
-// shiftIn register
-#define LOAD_PIN 2
-#define CLOCK_ENABLE_PIN 3
-#define CLOCK_PIN 4
-#define DATA_PIN 5
+#include <TimerOne.h>
 
-// ultrasonic sensor
-// #define TRIGGER_PIN 12
-// #define ECHO_PIN 13
+#define MOTOR_SPEED 120
+#define Kp 25
+#define Kd 3
 
-// motor board
-#define MTR_R_ENABLE_PIN 11 // speed
-#define MTR_R_INPUT_1_PIN 8 // direction
-#define MTR_R_INPUT_2_PIN 9 // direction
+#define NUM_LINE_SENSORS 5
+#define SENSOR_LINE_VALUE 1 // 1 = black, 0 = white
 
-#define MTR_L_ENABLE_PIN 10 // speed
-#define MTR_L_INPUT_1_PIN 6 // direction
-#define MTR_L_INPUT_2_PIN 7 // direction
+#define FPS 50
 
-#define INIT_MOTOR_SPEED 255
-#define MEDIUM_MOTOR_SPEED (INIT_MOTOR_SPEED / 3) * 2
-#define SLOW_MOTOR_SPEED INIT_MOTOR_SPEED / 3
-#define SUPER_SLOW_MOTOR_SPEED INIT_MOTOR_SPEED / 4
+struct Motor {
+  int enable; // speed
+  int input1; // direction
+  int input2; // direction
+};
 
-#define WHITE 0
-#define BLACK 1
-#define SENSOR_LINE_VALUE BLACK
+struct Ultrasonic {
+  int trigger;
+  int echo;
+};
 
-int lastLeftMotorSpeedCorrection = 0;
-int lastRightMotorSpeedCorrection = 0;
+Motor leftMotor = { 13, 12, 11 };
+Motor rightMotor = { 8, 10, 9 };
 
-// unsigned long previousMillis = 0;
+Ultrasonic frontUltrasonic = { 22, 2 };
+
+int lineSensors[NUM_LINE_SENSORS] = { 7, 6, 5, 4, 3 }; // left to right
+int lastActiveSensor;
+
+int lastError = 0;
+long lastMillis = 0;
+
+// long duration;
+volatile long distance;
+
+/**
+ * Motor control
+ * @param {Motor} motor
+ * @param {int} speed
+ * @param {int} direction
+ */
+void motorControl(Motor motor, int speed, int direction=1) {
+  analogWrite(motor.enable, speed);
+  digitalWrite(motor.input1, (direction == 1 ? HIGH : LOW));
+  digitalWrite(motor.input2, (direction == 1 ? LOW : HIGH));
+}
 
 /**
  * Setup
  */
 void setup() {
-  pinMode(LOAD_PIN, OUTPUT);
-  pinMode(CLOCK_ENABLE_PIN, OUTPUT);
-  pinMode(CLOCK_PIN, OUTPUT);
-  pinMode(DATA_PIN, INPUT);
+  Timer1.initialize(10 * 1000);
+  Timer1.attachInterrupt(getFrontDistance);
 
-  // pinMode(TRIGGER_PIN, OUTPUT);
-  // pinMode(ECHO_PIN, INPUT);
+  pinMode(leftMotor.enable, OUTPUT);
+  pinMode(leftMotor.input1, OUTPUT);
+  pinMode(leftMotor.input2, OUTPUT);
 
-  pinMode(MTR_R_ENABLE_PIN, OUTPUT);
-  pinMode(MTR_R_INPUT_1_PIN, OUTPUT);
-  pinMode(MTR_R_INPUT_2_PIN, OUTPUT);
+  pinMode(rightMotor.enable, OUTPUT);
+  pinMode(rightMotor.input1, OUTPUT);
+  pinMode(rightMotor.input2, OUTPUT);
 
-  pinMode(MTR_L_ENABLE_PIN, OUTPUT);
-  pinMode(MTR_L_INPUT_1_PIN, OUTPUT);
-  pinMode(MTR_L_INPUT_2_PIN, OUTPUT);
+  pinMode(frontUltrasonic.trigger, OUTPUT);
+  pinMode(frontUltrasonic.echo, INPUT);
+
+  for (int i = 0; i < NUM_LINE_SENSORS; i++) {
+    pinMode(lineSensors[i], INPUT);
+  }
 
   Serial.begin(9600);
 }
@@ -58,151 +75,77 @@ void setup() {
  * Loop
  */
 void loop() {
-  // unsigned long currentMillis = millis();
+  unsigned long currentMillis = millis();
 
-  // if (currentMillis - previousMillis >= 1000) {
-  //   Serial.println("1 second has past");
-    
-  //   if (getDistance() <= 10) {
-  //     Serial.println("Stop!");
-  //     leftMotorSpeed = 0;
-  //     rightMotorSpeed = 0;
-  //   }
-
-  //   previousMillis = currentMillis;
-  // }
-
-  byte sensorData = getSensorData();
-  
-  int leftMotorSpeedCorrection = 0;
-  int rightMotorSpeedCorrection = 0;
-  int noLineDetected = SENSOR_LINE_VALUE == 1 ? 255 : 1;
-
-  // we lost the line, keep going in the direction you were going before
-  if (sensorData == noLineDetected && (lastLeftMotorSpeedCorrection != 0 || lastRightMotorSpeedCorrection != 0)) {
-    leftMotorSpeedCorrection = lastLeftMotorSpeedCorrection;
-    rightMotorSpeedCorrection = lastRightMotorSpeedCorrection;
-  } else {
-    int numLineDetections = getNumLineDetections(sensorData);
-
-    // if more than one sensor of the sensor array triggers
-    // we might have hit a crossing and should go straight forward
-    if (numLineDetections > 1) {
-      leftMotorSpeedCorrection = 0;
-      rightMotorSpeedCorrection = 0;
-    } else {
-      for (int i = 1; i < 8; i++) {
-        int bitValue = bitRead(sensorData, i) == 0;
-
-        // 1 == far right, 7 == far left
-        if (bitValue == SENSOR_LINE_VALUE) {
-          Serial.println(i);
-
-          if (i == 4) { // immer gerade aus!
-            leftMotorSpeedCorrection = 0;
-            rightMotorSpeedCorrection = 0;
-          }
-          else if (i == 1) { // hard right!
-            leftMotorSpeedCorrection = 0;
-            rightMotorSpeedCorrection = INIT_MOTOR_SPEED;
-          }
-          else if (i == 7) { // hard left!
-            leftMotorSpeedCorrection = INIT_MOTOR_SPEED;
-            rightMotorSpeedCorrection = 0;
-          }
-          else if (i == 2) { // medium right!
-            leftMotorSpeedCorrection = SLOW_MOTOR_SPEED;
-            rightMotorSpeedCorrection = MEDIUM_MOTOR_SPEED;
-          }
-          else if (i == 6) { // medium left!
-            leftMotorSpeedCorrection = MEDIUM_MOTOR_SPEED;
-            rightMotorSpeedCorrection = SLOW_MOTOR_SPEED;
-          }
-          else if (i == 3) { // soft right!
-            leftMotorSpeedCorrection = SUPER_SLOW_MOTOR_SPEED;
-            rightMotorSpeedCorrection = SLOW_MOTOR_SPEED;
-          }
-          else if (i == 5) { // soft left!
-            leftMotorSpeedCorrection = SLOW_MOTOR_SPEED;
-            rightMotorSpeedCorrection = SUPER_SLOW_MOTOR_SPEED;
-          }
-        }
-      }
+  if (distance >= 2 && distance <= 400) {
+    if (distance <= 15) {
+      motorControl(leftMotor, 0, 1);
+      motorControl(rightMotor, 0, 1);
+      return;
     }
   }
 
-  int leftMotorSpeed = INIT_MOTOR_SPEED - leftMotorSpeedCorrection;
-  int rightMotorSpeed = INIT_MOTOR_SPEED - rightMotorSpeedCorrection;
+  if (currentMillis - lastMillis >= 1000 / FPS) {
+    int lineSensorData[NUM_LINE_SENSORS] = {};
 
-  // The motor speed should not exceed the max PWM value
-  leftMotorSpeed = constrain(leftMotorSpeed, 0, 255);
-  rightMotorSpeed = constrain(rightMotorSpeed, 0, 255);
+    for (int i = 0; i < NUM_LINE_SENSORS; i++) {
+      lineSensorData[i] = digitalRead(lineSensors[i]);
+    }
 
-  analogWrite(MTR_L_ENABLE_PIN, leftMotorSpeed);
-  digitalWrite(MTR_L_INPUT_1_PIN, LOW);
-  digitalWrite(MTR_L_INPUT_2_PIN, HIGH);
+    int goal = 3;
+    int activeSensor = getActiveLineDetectionSensor(lineSensorData);
 
-  analogWrite(MTR_R_ENABLE_PIN, rightMotorSpeed);
-  digitalWrite(MTR_R_INPUT_1_PIN, LOW);
-  digitalWrite(MTR_R_INPUT_2_PIN, HIGH);
+    if (activeSensor == 0) {
+      activeSensor = lastActiveSensor;
+    }
 
-  lastLeftMotorSpeedCorrection = leftMotorSpeedCorrection;
-  lastRightMotorSpeedCorrection = rightMotorSpeedCorrection; 
+    int error = goal - activeSensor;
+    int loopTime = millis() - lastMillis;
+
+    float p = Kp * error;
+    float d = Kd * ((error - lastError) / loopTime);
+
+    int leftMotorSpeed = MOTOR_SPEED - (p + d);
+    int rightMotorSpeed = MOTOR_SPEED + (p + d);
+
+    leftMotorSpeed = constrain(leftMotorSpeed, 0, 255);
+    rightMotorSpeed = constrain(rightMotorSpeed, 0, 255);
+
+    motorControl(leftMotor, leftMotorSpeed, 1);
+    motorControl(rightMotor, rightMotorSpeed, 1);
+
+    lastError = error;
+    lastMillis = millis();
+    lastActiveSensor = activeSensor;
+  }
 }
 
 /**
- * Returns the distance to on object in front
- * @return {long}
+ * Returns the index of the sensor that detected the line
+ * @param {array} sensorData
+ * @return {int}
  */
-// byte getDistance() {
-//   long duration;
-
-//   digitalWrite(TRIGGER_PIN, LOW);
-//   delayMicroseconds(2);
-//   digitalWrite(TRIGGER_PIN, HIGH);
-//   delayMicroseconds(10);
-//   digitalWrite(TRIGGER_PIN, LOW);
-
-//   duration = pulseIn(ECHO_PIN, HIGH);
-
-//   return duration * 0.034 / 2;
-// }
-
-/**
- * Returns the number of simultaneous line detections
- * @param {byte} sensorData
- * @return {bool}
- */
-bool getNumLineDetections(byte sensorData) {
-  int numLineDetections = 0;
-
-  for (int i = 1; i < 8; i++) {
-    int bitValue = bitRead(sensorData, i) == 0;
-
-    if (bitValue == SENSOR_LINE_VALUE) {
-      numLineDetections++;
+int getActiveLineDetectionSensor(int sensorData[]) {
+  for (int i = 0; i < NUM_LINE_SENSORS; i++) {
+    if (sensorData[i] == SENSOR_LINE_VALUE) {
+      return i + 1;
     }
   }
 
-  return numLineDetections;
+  return 0;
 }
 
 /**
- * Returns the sensor data
- * @return {byte}
+ * Returns the front distance in cm's
+ * @return
  */
-byte getSensorData() {
-  digitalWrite(LOAD_PIN, LOW);
-  delayMicroseconds(5);
+long getFrontDistance() {
+  digitalWrite(frontUltrasonic.trigger, LOW);
+  delayMicroseconds(2);
+  digitalWrite(frontUltrasonic.trigger, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(frontUltrasonic.trigger, LOW);
 
-  digitalWrite(LOAD_PIN, HIGH);
-  delayMicroseconds(5);
-
-  digitalWrite(CLOCK_PIN, HIGH);
-  digitalWrite(CLOCK_ENABLE_PIN, LOW);
-
-  byte data = shiftIn(DATA_PIN, CLOCK_PIN, LSBFIRST);
-  digitalWrite(CLOCK_ENABLE_PIN, HIGH);
-
-  return data;
+  long duration = pulseIn(frontUltrasonic.echo, HIGH);
+  distance = duration * 0.034 / 2;
 }
